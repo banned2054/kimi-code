@@ -1827,7 +1827,6 @@ export class KimiTUI {
         'user',
         !goalActive && stagingIds.length > 0 ? randomUUID() : undefined,
       );
-    const submissionId = stagingLease?.submissionId;
     // While a goal is being pursued the engine holds its active turn across the
     // whole continuation loop, so a fresh prompt races the goal driver at every
     // continuation boundary and is rejected with `turn.agent_busy`, dropping
@@ -1844,8 +1843,13 @@ export class KimiTUI {
       });
       return;
     }
+    // Text-only prompts also need an id to match hook-blocked completions.
+    const submissionId = stagingLease?.submissionId ?? randomUUID();
+    this.sessionEventHandler.expectPromptSubmission(submissionId);
     this.staging.trackDispatch(stagingLease, session.prompt(sdkInput, { promptId: submissionId }), (error) => {
-      this.failSessionRequest(`Failed to send: ${formatErrorMessage(error)}`);
+      if (this.sessionEventHandler.clearExpectedPromptSubmission(submissionId)) {
+        this.failSessionRequest(`Failed to send: ${formatErrorMessage(error)}`);
+      }
     });
   }
 

@@ -18,6 +18,7 @@ import type {
   SessionMetaUpdatedEvent,
   SkillActivatedEvent,
   PluginCommandActivatedEvent,
+  PromptCompletedEvent,
   ThinkingDeltaEvent,
   ToolCallDeltaEvent,
   ToolCallStartedEvent,
@@ -169,6 +170,8 @@ export class SessionEventHandler {
   private goalCompletionAwaitingClear = false;
   private goalCompletionTurnEnded = false;
   private currentTurnHasAssistantText = false;
+  private expectedPromptCompletionId: string | undefined;
+  private activeTurnId: string | undefined;
   private pluginCommandTurns: Map<string, string> = new Map();
   private pluginMcpToolsUsedInTurn: Set<string> = new Set();
   private pendingModelBlockedFallback: GoalChange | undefined;
@@ -189,6 +192,8 @@ export class SessionEventHandler {
     this.goalCompletionAwaitingClear = false;
     this.goalCompletionTurnEnded = false;
     this.currentTurnHasAssistantText = false;
+    this.expectedPromptCompletionId = undefined;
+    this.activeTurnId = undefined;
     this.pluginCommandTurns.clear();
     this.pluginMcpToolsUsedInTurn.clear();
     this.pendingModelBlockedFallback = undefined;
@@ -201,6 +206,17 @@ export class SessionEventHandler {
 
   clearAgentSwarmProgress(): void {
     this.subAgentEventHandler.clearAgentSwarmProgress();
+  }
+
+  /** Track submissions that may be blocked before a turn starts. */
+  expectPromptSubmission(promptId: string): void {
+    this.expectedPromptCompletionId = promptId;
+  }
+
+  clearExpectedPromptSubmission(promptId: string): boolean {
+    if (this.expectedPromptCompletionId !== promptId) return false;
+    this.expectedPromptCompletionId = undefined;
+    return true;
   }
 
   hasActiveAgentSwarmToolCall(): boolean {
@@ -277,6 +293,7 @@ export class SessionEventHandler {
     switch (event.type) {
       case 'turn.started': this.handleTurnBegin(event); break;
       case 'turn.ended': this.handleTurnEnd(event, sendQueued); break;
+      case 'prompt.completed': this.handlePromptCompleted(event, sendQueued); break;
       case 'turn.step.started': this.handleStepBegin(event); break;
       case 'turn.step.interrupted': this.handleStepInterrupted(event); break;
       case 'turn.step.completed': this.handleStepCompleted(event); break;
@@ -331,6 +348,8 @@ export class SessionEventHandler {
   private handleTurnBegin(event: TurnStartedEvent): void {
     this.host.handleTurnStarted?.(event);
     this.currentTurnHasAssistantText = false;
+    this.activeTurnId = String(event.turnId);
+    if (event.promptId !== undefined) this.clearExpectedPromptSubmission(event.promptId);
     if (event.origin?.kind === 'plugin_command') {
       this.pluginCommandTurns.set(String(event.turnId), event.origin.pluginId);
     }
@@ -389,6 +408,7 @@ export class SessionEventHandler {
     }
     this.host.streamingUI.resetToolUi();
     this.host.streamingUI.finalizeTurn(sendQueued);
+    if (this.activeTurnId === String(event.turnId)) this.activeTurnId = undefined;
     this.host.recordSessionActivity();
     this.renderPendingModelBlockedFallback();
     this.currentTurnHasAssistantText = false;
@@ -410,6 +430,23 @@ export class SessionEventHandler {
     }
     this.pluginMcpToolsUsedInTurn.clear();
     this.scheduleQueuedGoalPromotion();
+  }
+
+  /** Blocked submissions have no turn.ended event to settle the UI. */
+  private handlePromptCompleted(
+    event: PromptCompletedEvent,
+    sendQueued: (item: QueuedMessage) => void,
+  ): void {
+    if (event.reason !== 'blocked' || !this.clearExpectedPromptSubmission(event.promptId)) return;
+    if (
+      this.host.state.appState.streamingPhase === 'idle' ||
+      this.activeTurnId !== undefined
+    ) return;
+    this.host.streamingUI.flushNow();
+    this.host.streamingUI.resetToolUi();
+    this.host.streamingUI.finalizeTurn(sendQueued);
+    this.host.recordSessionActivity();
+    this.host.showStatus('Prompt blocked by hook; submission skipped.', 'error');
   }
 
   private handleStepBegin(event: TurnStepStartedEvent): void {

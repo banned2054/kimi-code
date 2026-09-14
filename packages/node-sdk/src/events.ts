@@ -28,6 +28,7 @@ export type {
   TurnEndReason,
 } from '@moonshot-ai/agent-core-v2/agent/loop/turnEvents';
 export type { TurnEndedEvent } from '@moonshot-ai/agent-core-v2/agent/loop/turnOps';
+export type { PromptCompletedEvent } from '@moonshot-ai/agent-core-v2/agent/prompt/promptEvents';
 
 export type {
   AssistantDeltaEvent,

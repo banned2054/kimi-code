@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -319,6 +319,75 @@ describe('Session.prompt events', () => {
       );
       expect(fakeProviderState.calls[0]?.systemPrompt).toContain('You are Kimi Code CLI');
       expect(fakeProviderState.calls[0]?.systemPrompt).toContain('Available skills');
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it.each([
+    {
+      label: 'stderr exit 2',
+      command: "node -e \"process.stderr.write('Hook handled this prompt; model submission skipped.'); process.exit(2)\"",
+    },
+    {
+      label: 'structured deny',
+      command: "node -e \"process.stdout.write(JSON.stringify({message:'Hook handled this prompt; model submission skipped.', hookSpecificOutput:{permissionDecision:'deny', permissionDecisionReason:'Handled by hook'}}))\"",
+    },
+  ])('forwards the blocked completion of a hook-denied prompt ($label) and keeps the session usable', async ({ command }) => {
+    const homeDir = await makeTempDir();
+    const workDir = await makeTempDir();
+    await writeFile(
+      join(homeDir, 'config.toml'),
+      `[[hooks]]\nevent = "UserPromptSubmit"\nmatcher = "^hook-stall$"\ncommand = ${JSON.stringify(command)}\n`,
+      'utf-8',
+    );
+    const harness = createKimiHarness({
+      identity: TEST_IDENTITY,
+      homeDir,
+    });
+
+    try {
+      await configureFakeProvider(harness);
+      const session = await harness.createSession({ id: 'ses_hook_blocked', workDir });
+      const events: Event[] = [];
+      const unsubscribe = session.onEvent((event) => events.push(event));
+
+      const blocked = waitForEvent(session, (event) => event.type === 'prompt.completed');
+      await session.prompt('hook-stall', { promptId: 'prompt_hook_blocked_1' });
+      const completion = await blocked;
+
+      expect(completion).toMatchObject({
+        type: 'prompt.completed',
+        sessionId: session.id,
+        agentId: 'main',
+        promptId: 'prompt_hook_blocked_1',
+        reason: 'blocked',
+      });
+      expect(events.some((event) => event.type === 'turn.started')).toBe(false);
+      expect(events.some((event) => event.type === 'turn.ended')).toBe(false);
+      expect(events.some((event) => event.type === 'hook.result')).toBe(true);
+      expect(fakeProviderState.calls).toHaveLength(0);
+
+      events.length = 0;
+      const normalCompletion = waitForEvent(
+        session,
+        (event) =>
+          event.type === 'prompt.completed' &&
+          event.promptId === 'prompt_normal_2',
+      );
+      const done = waitForEvent(session, (event) => event.type === 'turn.ended');
+      await session.prompt('reply with OK', { promptId: 'prompt_normal_2' });
+      await Promise.all([done, normalCompletion]);
+      unsubscribe();
+
+      expect(fakeProviderState.calls).toHaveLength(1);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'prompt.completed',
+          promptId: 'prompt_normal_2',
+          reason: 'completed',
+        }),
+      );
     } finally {
       await harness.close();
     }
