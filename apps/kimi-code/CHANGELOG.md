@@ -1,5 +1,11 @@
 # @moonshot-ai/kimi-code
 
+## 0.43.1
+
+### Patch Changes
+
+- [#3631](https://github.com/MoonshotAI/kimi-code/pull/3631) [`1336be3`](https://github.com/MoonshotAI/kimi-code/commit/1336be38777959cc558fed2b51dc53caa07da5db) Thanks [@wbxl2000](https://github.com/wbxl2000)! - Stop returning deleted sessions from global search before the search index catches up.
+
 ## 0.43.0
 
 ### Minor Changes
